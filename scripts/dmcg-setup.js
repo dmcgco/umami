@@ -4,8 +4,9 @@
  *
  * Sets the admin password from UMAMI_ADMIN_PASSWORD, so the default admin/umami login is never live,
  * registers the CMS's API key (UMAMI_SETUP_API_KEY, stored only as its hash, as Umami itself does),
- * and makes sure the dmcg.co website exists with a fixed id (UMAMI_SETUP_WEBSITE_ID). Every step is
- * idempotent; a missing variable skips its step.
+ * makes sure the dmcg.co website exists with a fixed id (UMAMI_SETUP_WEBSITE_ID), and keeps each query
+ * on one worker so the small database doesn't run out of memory. Every step is idempotent; a missing
+ * variable skips its step.
  */
 import { execFileSync } from 'node:child_process';
 import crypto from 'node:crypto';
@@ -40,6 +41,12 @@ if (UMAMI_SETUP_WEBSITE_ID) {
     `INSERT INTO website (website_id, name, domain, user_id, created_by) VALUES (${quote(UMAMI_SETUP_WEBSITE_ID)}, 'dmcg.co', 'dmcg.co', ${quote(ADMIN_ID)}, ${quote(ADMIN_ID)}) ON CONFLICT (website_id) DO NOTHING;`,
   );
 }
+
+// Neon's small compute ran out of memory once the dashboard's queries came in parallel, each one
+// also splitting across parallel workers. One worker per query keeps each query's memory to itself.
+statements.push(
+  `DO $$ BEGIN EXECUTE format('ALTER DATABASE %I SET max_parallel_workers_per_gather = 0', current_database()); END $$;`,
+);
 
 if (statements.length) {
   const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'dmcg-setup-')), 'setup.sql');
